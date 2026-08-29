@@ -71,8 +71,8 @@ export async function exportToSTLZip(bricks: BrickInstance[], projectName: strin
       sizeZ: b.sizeZ,
     });
     const tx = (b.gridX + b.sizeX / 2) * UNIT_PITCH_XY_MM;
-    const ty = (b.gridY + b.sizeY / 2) * UNIT_PITCH_XY_MM;
-    const tz = b.gridZ * UNIT_PITCH_Z_MM;
+    const ty = b.layerIndex * UNIT_PITCH_Z_MM; // Vertical height along Y
+    const tz = (b.gridY + b.sizeY / 2) * UNIT_PITCH_XY_MM; // Depth along Z
     geo.translate(tx, ty, tz);
     assembledGeos.push(geo);
   });

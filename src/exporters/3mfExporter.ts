@@ -137,9 +137,10 @@ function generate3DModelXml(
 
       for (let i = 0; i < numVertices; i++) {
         const vx = posAttr.getX(i).toFixed(3);
-        const vy = posAttr.getY(i).toFixed(3);
-        const vz = posAttr.getZ(i).toFixed(3);
-        meshXml += `          <vertex x="${vx}" y="${vy}" z="${vz}"/>\n`;
+        const vy = posAttr.getY(i).toFixed(3); // Three.js Y is height
+        const vz = posAttr.getZ(i).toFixed(3); // Three.js Z is depth
+        // 3MF maps: X -> width (vx), Y -> depth (vz), Z -> height (vy)
+        meshXml += `          <vertex x="${vx}" y="${vz}" z="${vy}"/>\n`;
       }
 
       meshXml += `        </vertices>\n        <triangles>\n`;
