@@ -21,10 +21,27 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const fileInputRef = React.useRef<HTMLInputElement>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      onFileUpload(e.target.files[0]);
+  const [isSampleOpen, setIsSampleOpen] = React.useState<boolean>(false);
+  const sampleMenuRef = React.useRef<HTMLDivElement>(null);
+
+  // Close dropdown when clicking outside
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (sampleMenuRef.current && !sampleMenuRef.current.contains(event.target as Node)) {
+        setIsSampleOpen(false);
+      }
+    };
+    if (isSampleOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
     }
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [isSampleOpen]);
+
+  const handleSelectSample = (sample: SampleModel) => {
+    setIsSampleOpen(false);
+    onSelectSample(sample);
   };
 
   const navItems = [
@@ -62,34 +79,62 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           {/* Quick Upload & Sample Picker */}
           <div className="flex items-center space-x-2 sm:space-x-3">
-            {/* Sample Selector */}
-            <div className="relative group">
-              <button className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium border border-slate-700 transition">
+            {/* Sample Selector Dropdown */}
+            <div className="relative" ref={sampleMenuRef}>
+              <button
+                type="button"
+                onClick={() => setIsSampleOpen(!isSampleOpen)}
+                className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition ${
+                  isSampleOpen
+                    ? 'bg-blue-600/30 border-blue-500 text-white shadow-sm ring-1 ring-blue-400/50'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700'
+                }`}
+              >
                 <span>Modelos de Ejemplo</span>
-                <span className="text-xs opacity-60">▼</span>
+                <span className={`text-[10px] opacity-70 transition-transform ${isSampleOpen ? 'rotate-180' : ''}`}>▼</span>
               </button>
-              <div className="absolute right-0 mt-1 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-xl py-2 hidden group-hover:block z-50">
-                <div className="px-3 py-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                  Cargar Ejemplo Rápido
+
+              {isSampleOpen && (
+                <div className="absolute right-0 mt-1.5 w-64 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl py-2 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
+                  <div className="px-3.5 py-1.5 text-[11px] font-bold text-slate-400 uppercase tracking-wider border-b border-slate-800 mb-1">
+                    Cargar Modelo de Prueba
+                  </div>
+                  <div className="max-h-72 overflow-y-auto custom-scrollbar px-1 space-y-0.5">
+                    {SAMPLE_MODELS.map((sample) => (
+                      <button
+                        key={sample.id}
+                        type="button"
+                        onClick={() => handleSelectSample(sample)}
+                        className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-blue-600/30 hover:text-white rounded-lg flex items-center justify-between transition group"
+                      >
+                        <div className="flex items-center space-x-2.5">
+                          <span className="text-base">{sample.icon}</span>
+                          <div>
+                            <div className="font-semibold">{sample.name}</div>
+                            <div className="text-[10px] text-slate-400 group-hover:text-blue-300">
+                              {sample.category}
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[10px] text-blue-400 opacity-0 group-hover:opacity-100 font-mono transition">
+                          Cargar →
+                        </span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                {SAMPLE_MODELS.map((sample) => (
-                  <button
-                    key={sample.id}
-                    onClick={() => onSelectSample(sample)}
-                    className="w-full text-left px-3 py-2 text-xs text-slate-200 hover:bg-blue-600/30 hover:text-white flex items-center space-x-2 transition"
-                  >
-                    <span className="text-base">{sample.icon}</span>
-                    <span>{sample.name}</span>
-                  </button>
-                ))}
-              </div>
+              )}
             </div>
 
             {/* STL Upload Button */}
             <input
               type="file"
               ref={fileInputRef}
-              onChange={handleFileChange}
+              onChange={(e) => {
+                if (e.target.files && e.target.files[0]) {
+                  onFileUpload(e.target.files[0]);
+                }
+              }}
               accept=".stl,.obj"
               className="hidden"
             />
