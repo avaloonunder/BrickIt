@@ -3,7 +3,17 @@ import * as THREE from 'three';
 import { BrickInstance, VoxelGrid, FilamentColor } from '../types/brick';
 import { createModularBrickGeometry } from '../core/brickGeometry';
 import { UNIT_PITCH_XY_MM, UNIT_PITCH_Z_MM } from '../constants/brickCatalog';
-import { Eye, EyeOff, Layers, Maximize2, RotateCcw, Palette } from 'lucide-react';
+import {
+  RotateCcw,
+  Palette,
+  ChevronUp,
+  ChevronDown,
+  Play,
+  Pause,
+  Layers,
+  Eye,
+  Sparkles,
+} from 'lucide-react';
 
 export interface Viewport3DHandle {
   captureSnapshot: () => string;
@@ -18,6 +28,7 @@ interface Viewport3DProps {
   paintMode?: boolean;
   onBrickColorChange?: (brickId: string, color: FilamentColor) => void;
   activeLayerFilter?: number | null; // null = all layers, number = only up to layer N
+  onLayerFilterChange?: (layer: number | null) => void;
   currentStepIndex?: number | null; // For assembly guide playback
   showOriginalMesh?: boolean;
   showGridFloor?: boolean;
@@ -32,6 +43,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
   paintMode = false,
   onBrickColorChange,
   activeLayerFilter = null,
+  onLayerFilterChange,
   currentStepIndex = null,
   showOriginalMesh = false,
   showGridFloor = true,
@@ -63,6 +75,32 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
   const [hoveredBrick, setHoveredBrick] = useState<BrickInstance | null>(null);
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mousePosRef = useRef<THREE.Vector2>(new THREE.Vector2());
+
+  // Vertical Layer Slider state
+  const [isPlayingLayers, setIsPlayingLayers] = useState<boolean>(false);
+  const [soloLayerMode, setSoloLayerMode] = useState<boolean>(false);
+
+  // Compute total layers
+  const maxLayerIndex = bricks.length > 0 ? Math.max(...bricks.map((b) => b.layerIndex)) : 0;
+  const currentVisibleLayer = activeLayerFilter === null ? maxLayerIndex : activeLayerFilter;
+
+  // Auto-play layers build animation
+  useEffect(() => {
+    let timer: any;
+    if (isPlayingLayers && maxLayerIndex > 0) {
+      timer = setInterval(() => {
+        if (activeLayerFilter === null) {
+          onLayerFilterChange?.(0);
+        } else if (activeLayerFilter >= maxLayerIndex) {
+          onLayerFilterChange?.(null);
+          setIsPlayingLayers(false);
+        } else {
+          onLayerFilterChange?.(activeLayerFilter + 1);
+        }
+      }, 500);
+    }
+    return () => clearInterval(timer);
+  }, [isPlayingLayers, activeLayerFilter, maxLayerIndex, onLayerFilterChange]);
 
   // Expose snapshot & focus methods to parent
   useImperativeHandle(ref, () => ({
@@ -296,17 +334,25 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
     const materialCache = new Map<string, THREE.MeshStandardMaterial>();
 
     bricks.forEach((brick) => {
-      // Layer filtering for assembly guide / slicing
-      const isVisible = activeLayerFilter === null || brick.layerIndex <= activeLayerFilter;
+      // Layer filtering for vertical slider & assembly guide
+      let isVisible = true;
+      if (activeLayerFilter !== null) {
+        if (soloLayerMode) {
+          isVisible = brick.layerIndex === activeLayerFilter;
+        } else {
+          isVisible = brick.layerIndex <= activeLayerFilter;
+        }
+      }
       if (!isVisible) return;
 
+      const isTopActiveLayer = activeLayerFilter !== null && brick.layerIndex === activeLayerFilter;
       const isCurrentStepBrick = currentStepIndex !== null && (brick.layerIndex + 1 === currentStepIndex);
       const isPastLayer = currentStepIndex !== null && (brick.layerIndex + 1 < currentStepIndex);
 
       const colorHex = brick.color.hex;
       let matKey = colorHex;
       if (isPastLayer) matKey += '_ghost';
-      if (isCurrentStepBrick) matKey += '_active';
+      if (isCurrentStepBrick || isTopActiveLayer) matKey += '_active';
 
       let material = materialCache.get(matKey);
       if (!material) {
@@ -320,12 +366,12 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
             roughness: 0.5,
             metalness: 0.1,
           });
-        } else if (isCurrentStepBrick) {
+        } else if (isCurrentStepBrick || isTopActiveLayer) {
           material = new THREE.MeshStandardMaterial({
             color: color,
             roughness: 0.25,
             metalness: 0.05,
-            emissive: color.clone().multiplyScalar(0.2),
+            emissive: color.clone().multiplyScalar(0.18),
           });
         } else {
           material = new THREE.MeshStandardMaterial({
@@ -362,7 +408,7 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
 
       group.add(mesh);
     });
-  }, [bricks, activeLayerFilter, currentStepIndex, explodeFactor]);
+  }, [bricks, activeLayerFilter, soloLayerMode, currentStepIndex, explodeFactor]);
 
   // 5. Mouse Interaction: Orbit, Pan, Zoom, Hover & Click to Paint
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -380,7 +426,6 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
     prevMouseRef.current = { x: e.clientX, y: e.clientY };
 
     if (isDraggingRef.current) {
-      // Orbit rotation
       cameraSphericalRef.current.theta -= deltaX * 0.008;
       cameraSphericalRef.current.phi = Math.max(
         0.05,
@@ -388,7 +433,6 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
       );
       updateCameraPosition();
     } else if (isPanningRef.current) {
-      // Pan target
       const panSpeed = 0.2;
       const forward = new THREE.Vector3();
       cameraRef.current?.getWorldDirection(forward);
@@ -444,6 +488,13 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
     }
   };
 
+  // Count currently rendered visible bricks
+  const visibleBricksCount = bricks.filter((b) => {
+    if (activeLayerFilter === null) return true;
+    if (soloLayerMode) return b.layerIndex === activeLayerFilter;
+    return b.layerIndex <= activeLayerFilter;
+  }).length;
+
   return (
     <div
       ref={containerRef}
@@ -467,6 +518,117 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
           <RotateCcw className="w-4 h-4" />
         </button>
       </div>
+
+      {/* ========================================================= */}
+      {/* VERTICAL LAYER SLICER HUD (Bambu/Orca Slicer Style)       */}
+      {/* ========================================================= */}
+      {bricks.length > 0 && maxLayerIndex > 0 && (
+        <div
+          onMouseDown={(e) => e.stopPropagation()}
+          className="absolute top-1/2 -translate-y-1/2 left-4 bg-slate-900/90 backdrop-blur-md border border-slate-800 rounded-2xl p-2.5 shadow-2xl flex flex-col items-center space-y-2 z-20"
+        >
+          <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center space-x-1">
+            <Layers className="w-3 h-3 text-blue-400" />
+            <span>Capas</span>
+          </div>
+
+          {/* Step Up Button */}
+          <button
+            type="button"
+            title="Subir una capa"
+            onClick={() => {
+              if (activeLayerFilter === null) return;
+              if (activeLayerFilter >= maxLayerIndex) {
+                onLayerFilterChange?.(null);
+              } else {
+                onLayerFilterChange?.(activeLayerFilter + 1);
+              }
+            }}
+            disabled={activeLayerFilter === null || activeLayerFilter >= maxLayerIndex}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-30 border border-slate-700 transition"
+          >
+            <ChevronUp className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Vertical Slider Track Container */}
+          <div className="relative flex items-center justify-center py-1 h-52">
+            <input
+              type="range"
+              min="0"
+              max={maxLayerIndex}
+              value={currentVisibleLayer}
+              onChange={(e) => {
+                const val = parseInt(e.target.value);
+                if (val >= maxLayerIndex) {
+                  onLayerFilterChange?.(null);
+                } else {
+                  onLayerFilterChange?.(val);
+                }
+              }}
+              className="h-48 w-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500 [writing-mode:vertical-lr] [direction:rtl]"
+              style={{ accentColor: '#3b82f6' }}
+            />
+          </div>
+
+          {/* Step Down Button */}
+          <button
+            type="button"
+            title="Bajar una capa"
+            onClick={() => {
+              if (activeLayerFilter === null) {
+                onLayerFilterChange?.(maxLayerIndex - 1);
+              } else if (activeLayerFilter > 0) {
+                onLayerFilterChange?.(activeLayerFilter - 1);
+              }
+            }}
+            disabled={activeLayerFilter === 0}
+            className="p-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-200 disabled:opacity-30 border border-slate-700 transition"
+          >
+            <ChevronDown className="w-3.5 h-3.5" />
+          </button>
+
+          {/* Auto-Play Layer Build Animation */}
+          <button
+            type="button"
+            title={isPlayingLayers ? 'Pausar animación de capas' : 'Reproducir montaje por capas'}
+            onClick={() => setIsPlayingLayers(!isPlayingLayers)}
+            className={`p-1.5 rounded-lg border text-xs transition ${
+              isPlayingLayers
+                ? 'bg-amber-600/30 border-amber-500 text-amber-300'
+                : 'bg-blue-600/30 border-blue-500 text-blue-300 hover:bg-blue-600/50'
+            }`}
+          >
+            {isPlayingLayers ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5" />}
+          </button>
+
+          {/* Show All / Reset Filter */}
+          <button
+            type="button"
+            title="Mostrar todas las capas"
+            onClick={() => {
+              onLayerFilterChange?.(null);
+              setIsPlayingLayers(false);
+            }}
+            className={`px-2 py-1 rounded-md text-[10px] font-bold border transition ${
+              activeLayerFilter === null
+                ? 'bg-blue-600 border-blue-400 text-white'
+                : 'bg-slate-800 border-slate-700 text-slate-300 hover:text-white'
+            }`}
+          >
+            Todo
+          </button>
+
+          {/* Current Layer Info Tooltip Badge */}
+          <div className="pt-1 text-center border-t border-slate-800 text-[10px]">
+            <div className="font-bold text-white whitespace-nowrap">
+              Capa {currentVisibleLayer + 1}/{maxLayerIndex + 1}
+            </div>
+            <div className="text-slate-400 font-mono text-[9px] mt-0.5">
+              {visibleBricksCount} uds
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Hover Info Badge */}
       {hoveredBrick && (

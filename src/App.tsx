@@ -284,6 +284,7 @@ export const App: React.FC = () => {
             paintMode={activeTab === 'paint'}
             onBrickColorChange={handleBrickColorChange}
             activeLayerFilter={activeTab === 'guide' ? null : activeLayerFilter}
+            onLayerFilterChange={(layer) => setActiveLayerFilter(layer)}
             currentStepIndex={activeTab === 'guide' ? currentStepIndex : null}
             showOriginalMesh={showOriginalMesh}
             showGridFloor={showGridFloor}
