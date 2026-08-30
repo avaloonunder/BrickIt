@@ -188,25 +188,81 @@ export const Viewport3D = forwardRef<Viewport3DHandle, Viewport3DProps>(({
     }
   }, [showGridFloor]);
 
-  // 3. Update Original STL Mesh Geometry
+  // 3. Update Original STL Mesh Geometry (Scaled & Aligned with Brick Model)
   useEffect(() => {
     const group = originalMeshGroupRef.current;
     group.clear();
 
-    if (originalGeometry && showOriginalMesh) {
+    if (originalGeometry && showOriginalMesh && voxelGrid && bricks.length > 0) {
+      originalGeometry.computeBoundingBox();
+      const bbox = originalGeometry.boundingBox!;
+      const size = new THREE.Vector3();
+      bbox.getSize(size);
+
+      // Compute brick assembly bounds in scene units
+      let minX = Infinity, maxX = -Infinity;
+      let minZ = Infinity, maxZ = -Infinity;
+
+      bricks.forEach((b) => {
+        const bx = b.gridX * UNIT_PITCH_XY_MM;
+        const bz = b.gridY * UNIT_PITCH_XY_MM;
+        const bx2 = (b.gridX + b.sizeX) * UNIT_PITCH_XY_MM;
+        const bz2 = (b.gridY + b.sizeY) * UNIT_PITCH_XY_MM;
+
+        minX = Math.min(minX, bx);
+        maxX = Math.max(maxX, bx2);
+        minZ = Math.min(minZ, bz);
+        maxZ = Math.max(maxZ, bz2);
+      });
+
+      const centerX = (minX + maxX) / 2;
+      const centerZ = (minZ + maxZ) / 2;
+
+      // Scale factor: mapping original mesh dimensions to voxelized dimensions
+      const totalVoxelWidth = voxelGrid.dimX * voxelGrid.pitchX;
+      const totalVoxelHeight = voxelGrid.dimZ * voxelGrid.pitchZ;
+      const totalVoxelDepth = voxelGrid.dimY * voxelGrid.pitchY;
+
+      const scaleX = size.x > 0 ? totalVoxelWidth / size.x : 1.0;
+      const scaleY = size.y > 0 ? totalVoxelHeight / size.y : 1.0;
+      const scaleZ = size.z > 0 ? totalVoxelDepth / size.z : 1.0;
+
       const mat = new THREE.MeshStandardMaterial({
         color: 0x60a5fa,
         transparent: true,
-        opacity: 0.35,
+        opacity: 0.4,
         wireframe: false,
         side: THREE.DoubleSide,
+        roughness: 0.3,
+        metalness: 0.1,
+      });
+
+      // Wireframe overlay for crisp contour comparison
+      const wireMat = new THREE.MeshBasicMaterial({
+        color: 0x93c5fd,
+        wireframe: true,
+        transparent: true,
+        opacity: 0.3,
       });
 
       const mesh = new THREE.Mesh(originalGeometry, mat);
-      mesh.castShadow = true;
+      const wireMesh = new THREE.Mesh(originalGeometry, wireMat);
+      mesh.add(wireMesh);
+
+      // Scale mesh to match brick model proportions
+      mesh.scale.set(scaleX, scaleY, scaleZ);
+
+      // Position mesh so it aligns with the brick center in X/Z and starts at Y=0
+      mesh.position.set(
+        -bbox.min.x * scaleX - centerX,
+        -bbox.min.y * scaleY,
+        -bbox.min.z * scaleZ - centerZ
+      );
+
+      mesh.castShadow = false;
       group.add(mesh);
     }
-  }, [originalGeometry, showOriginalMesh]);
+  }, [originalGeometry, showOriginalMesh, voxelGrid, bricks]);
 
   // 4. Update Modular Bricks 3D Geometry
   useEffect(() => {
