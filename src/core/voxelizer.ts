@@ -3,74 +3,11 @@ import { VoxelGrid, VoxelizerSettings } from '../types/brick';
 import { triangleIntersectsAABB } from './math3d';
 
 /**
- * Robust Möller-Trumbore Ray-Triangle intersection test along the +X ray at a fixed (Y, Z).
- * Returns the intersection X coordinate if the ray hits the triangle interior, or null.
- */
-function rayIntersectTriangleX(
-  rayOriginY: number,
-  rayOriginZ: number,
-  v0: THREE.Vector3,
-  v1: THREE.Vector3,
-  v2: THREE.Vector3
-): number | null {
-  // Bounding box in (Y, Z) plane pre-filter
-  const minY = Math.min(v0.y, v1.y, v2.y);
-  const maxY = Math.max(v0.y, v1.y, v2.y);
-  const minZ = Math.min(v0.z, v1.z, v2.z);
-  const maxZ = Math.max(v0.z, v1.z, v2.z);
-
-  if (rayOriginY < minY - 1e-4 || rayOriginY > maxY + 1e-4 || rayOriginZ < minZ - 1e-4 || rayOriginZ > maxZ + 1e-4) {
-    return null;
-  }
-
-  const e1x = v1.x - v0.x;
-  const e1y = v1.y - v0.y;
-  const e1z = v1.z - v0.z;
-
-  const e2x = v2.x - v0.x;
-  const e2y = v2.y - v0.y;
-  const e2z = v2.z - v0.z;
-
-  // Direction is (1, 0, 0)
-  // Cross(D, e2) = (0, e2z, -e2y)
-  const pvecY = e2z;
-  const pvecZ = -e2y;
-
-  const det = e1y * pvecY + e1z * pvecZ; // Normal.x
-
-  if (Math.abs(det) < 1e-8) {
-    return null; // Ray is parallel to triangle surface
-  }
-
-  const invDet = 1.0 / det;
-
-  const tvecY = rayOriginY - v0.y;
-  const tvecZ = rayOriginZ - v0.z;
-
-  const u = (tvecY * pvecY + tvecZ * pvecZ) * invDet;
-  if (u < -1e-4 || u > 1.0 + 1e-4) {
-    return null;
-  }
-
-  // Cross(tvec, e1) . D
-  const qvecX = tvecY * e1z - tvecZ * e1y;
-  const v = qvecX * invDet;
-  if (v < -1e-4 || u + v > 1.0 + 1e-4) {
-    return null;
-  }
-
-  // Compute exact X coordinate on triangle plane
-  const normalX = e1y * e2z - e1z * e2y;
-  const normalY = e1z * e2x - e1x * e2z;
-  const normalZ = e1x * e2y - e1y * e2x;
-
-  const hitX = v0.x - (normalY * tvecY + normalZ * tvecZ) / normalX;
-  return hitX;
-}
-
-/**
  * High-precision 3D Voxelizer for modular interlocking bricks.
- * Preserves true geometric holes (rings, toruses, tubes, arches) and fills solid walls.
+ * Uses Conservative 26-Connected Surface Rasterization + 3D Topological Flood-Fill.
+ * - Fills 100% of internal solid volumes without leaving internal holes or gaps.
+ * - Preserves all geometric holes (rings, toruses, tubes, arches, windows).
+ *
  * Coordinate mapping:
  * - Mesh X -> gridX (width)
  * - Mesh Y -> gridZ / layerIndex (vertical height)
@@ -122,20 +59,21 @@ export function voxelizeGeometry(
   const posAttr = geo.getAttribute('position') as THREE.BufferAttribute;
   const numTriangles = posAttr.count / 3;
 
-  // Extract triangles
-  const triangles: { v0: THREE.Vector3; v1: THREE.Vector3; v2: THREE.Vector3 }[] = [];
+  const v0 = new THREE.Vector3();
+  const v1 = new THREE.Vector3();
+  const v2 = new THREE.Vector3();
   const triMin = new THREE.Vector3();
   const triMax = new THREE.Vector3();
   const cellMin = new THREE.Vector3();
   const cellMax = new THREE.Vector3();
 
+  // 1. Conservative Surface Rasterization
+  // A. Triangle-AABB intersection
   for (let t = 0; t < numTriangles; t++) {
-    const v0 = new THREE.Vector3().fromBufferAttribute(posAttr, t * 3);
-    const v1 = new THREE.Vector3().fromBufferAttribute(posAttr, t * 3 + 1);
-    const v2 = new THREE.Vector3().fromBufferAttribute(posAttr, t * 3 + 2);
-    triangles.push({ v0, v1, v2 });
+    v0.fromBufferAttribute(posAttr, t * 3);
+    v1.fromBufferAttribute(posAttr, t * 3 + 1);
+    v2.fromBufferAttribute(posAttr, t * 3 + 2);
 
-    // 1. Surface Voxelization: Triangle-AABB intersection test
     triMin.set(
       Math.min(v0.x, v1.x, v2.x),
       Math.min(v0.y, v1.y, v2.y),
@@ -173,60 +111,118 @@ export function voxelizeGeometry(
 
           if (triangleIntersectsAABB(cellMin, cellMax, v0, v1, v2)) {
             surfaceGrid[idx] = 1;
-            resultGrid[idx] = 1;
+          }
+        }
+      }
+    }
+
+    // B. Dense Point Sub-Sampling on Triangle Surface (prevents diagonal flood-fill leaks)
+    const edge1 = new THREE.Vector3().subVectors(v1, v0);
+    const edge2 = new THREE.Vector3().subVectors(v2, v0);
+    const len1 = edge1.length();
+    const len2 = edge2.length();
+    const minPitch = Math.min(effPitchX, effPitchY, effPitchZ);
+    const steps1 = Math.max(1, Math.ceil(len1 / (minPitch * 0.4)));
+    const steps2 = Math.max(1, Math.ceil(len2 / (minPitch * 0.4)));
+
+    const pt = new THREE.Vector3();
+    for (let i = 0; i <= steps1; i++) {
+      const u = i / steps1;
+      for (let j = 0; j <= steps2; j++) {
+        const v = j / steps2;
+        if (u + v <= 1.0) {
+          pt.copy(v0).addScaledVector(edge1, u).addScaledVector(edge2, v);
+
+          const gx = Math.floor((pt.x - bbox.min.x) / effPitchX);
+          const gz = Math.floor((pt.y - bbox.min.y) / effPitchY);
+          const gy = Math.floor((pt.z - bbox.min.z) / effPitchZ);
+
+          if (gx >= 0 && gx < dimX && gy >= 0 && gy < dimY_depth && gz >= 0 && gz < dimZ_layers) {
+            surfaceGrid[getIndex(gx, gy, gz)] = 1;
           }
         }
       }
     }
   }
 
-  // 2. Solid Voxelization via Scanline Ray-Parity (Properly Preserves Geometric Holes)
+  // 2. Solid Filling vs Shell Mode
   if (settings.fillMode === 'solid') {
+    // 3D Topological Outside BFS
+    // Create padded grid with 1 cell border of air in all directions
+    const padX = dimX + 2;
+    const padY = dimY_depth + 2;
+    const padZ = dimZ_layers + 2;
+    const padTotal = padX * padY * padZ;
+
+    const padGrid = new Uint8Array(padTotal); // 0 = unvisited air, 1 = surface wall, 2 = outside air
+
+    const getPadIndex = (px: number, py: number, pz: number) => {
+      return pz * (padX * padY) + py * padX + px;
+    };
+
+    // Copy surface voxels to padded grid
     for (let gz = 0; gz < dimZ_layers; gz++) {
-      const rayY = bbox.min.y + (gz + 0.5) * effPitchY;
-
       for (let gy = 0; gy < dimY_depth; gy++) {
-        const rayZ = bbox.min.z + (gy + 0.5) * effPitchZ;
-
-        // Collect all intersection X coordinates along this ray
-        const hits: number[] = [];
-
-        for (let t = 0; t < triangles.length; t++) {
-          const hitX = rayIntersectTriangleX(rayY, rayZ, triangles[t].v0, triangles[t].v1, triangles[t].v2);
-          if (hitX !== null) {
-            hits.push(hitX);
-          }
-        }
-
-        if (hits.length > 0) {
-          hits.sort((a, b) => a - b);
-
-          // Cluster and deduplicate hits (removing double-hits on shared edges/vertices)
-          const uniqueHits: number[] = [];
-          for (let i = 0; i < hits.length; i++) {
-            if (
-              uniqueHits.length === 0 ||
-              Math.abs(hits[i] - uniqueHits[uniqueHits.length - 1]) > effPitchX * 0.25
-            ) {
-              uniqueHits.push(hits[i]);
-            }
-          }
-
-          // Ray-parity intervals: (hit[0], hit[1]), (hit[2], hit[3]), etc.
-          for (let i = 0; i < uniqueHits.length - 1; i += 2) {
-            const startX = uniqueHits[i];
-            const endX = uniqueHits[i + 1];
-
-            const startGX = Math.max(0, Math.floor((startX - bbox.min.x) / effPitchX));
-            const endGX = Math.min(dimX - 1, Math.floor((endX - bbox.min.x) / effPitchX));
-
-            for (let gx = startGX; gx <= endGX; gx++) {
-              resultGrid[getIndex(gx, gy, gz)] = 1;
-            }
+        for (let gx = 0; gx < dimX; gx++) {
+          if (surfaceGrid[getIndex(gx, gy, gz)] === 1) {
+            padGrid[getPadIndex(gx + 1, gy + 1, gz + 1)] = 1;
           }
         }
       }
     }
+
+    // BFS Queue for outside air traversal
+    const queue = new Int32Array(padTotal);
+    let head = 0;
+    let tail = 0;
+
+    // Start BFS at (0, 0, 0)
+    padGrid[0] = 2; // Outside air
+    queue[tail++] = 0;
+
+    const neighbors = [
+      [-1, 0, 0], [1, 0, 0],
+      [0, -1, 0], [0, 1, 0],
+      [0, 0, -1], [0, 0, 1],
+    ];
+
+    while (head < tail) {
+      const cur = queue[head++];
+      const pz = Math.floor(cur / (padX * padY));
+      const rem = cur % (padX * padY);
+      const py = Math.floor(rem / padX);
+      const px = rem % padX;
+
+      for (let i = 0; i < 6; i++) {
+        const nx = px + neighbors[i][0];
+        const ny = py + neighbors[i][1];
+        const nz = pz + neighbors[i][2];
+
+        if (nx >= 0 && nx < padX && ny >= 0 && ny < padY && nz >= 0 && nz < padZ) {
+          const nIdx = getPadIndex(nx, ny, nz);
+          if (padGrid[nIdx] === 0) {
+            padGrid[nIdx] = 2; // Mark as outside air
+            queue[tail++] = nIdx;
+          }
+        }
+      }
+    }
+
+    // Extract Solid Voxels:
+    // Any cell NOT reached by the outside air (padGrid !== 2) is INSIDE the solid volume!
+    for (let gz = 0; gz < dimZ_layers; gz++) {
+      for (let gy = 0; gy < dimY_depth; gy++) {
+        for (let gx = 0; gx < dimX; gx++) {
+          const padIdx = getPadIndex(gx + 1, gy + 1, gz + 1);
+          if (padGrid[padIdx] !== 2) {
+            resultGrid[getIndex(gx, gy, gz)] = 1;
+          }
+        }
+      }
+    }
+  } else {
+    // Shell Mode: copy surface grid
+    resultGrid.set(surfaceGrid);
   }
 
   return {
