@@ -10,6 +10,13 @@ export interface SampleModel {
 
 export const SAMPLE_MODELS: SampleModel[] = [
   {
+    id: 'ring_torus',
+    name: 'Anillo / Toroide 3D (Ring)',
+    category: 'Formas con Hueco',
+    icon: '💍',
+    getGeometry: () => createRingGeometry(),
+  },
+  {
     id: 'heart_3d',
     name: 'Corazón 3D (Heart)',
     category: 'Formas',
@@ -43,12 +50,23 @@ export const SAMPLE_MODELS: SampleModel[] = [
     category: 'Matemáticas',
     icon: '🌀',
     getGeometry: () => {
-      const geo = new THREE.TorusKnotGeometry(20, 6, 64, 16, 2, 3);
+      const geo = new THREE.TorusKnotGeometry(18, 5.5, 64, 16, 2, 3);
       geo.center();
       return geo;
     },
   },
 ];
+
+/**
+ * Creates a clean 3D Ring/Torus geometry with a prominent open central hole.
+ */
+function createRingGeometry(): THREE.BufferGeometry {
+  // Torus: radius 22mm (outer diameter 58mm, inner diameter 30mm), tube radius 7mm
+  const geo = new THREE.TorusGeometry(22, 7, 24, 48);
+  geo.rotateX(Math.PI / 2); // Lay flat on the build plane
+  geo.center();
+  return geo;
+}
 
 function createHeartGeometry(): THREE.BufferGeometry {
   const x = 0, y = 0;
@@ -78,7 +96,6 @@ function createHeartGeometry(): THREE.BufferGeometry {
 }
 
 function createCastleGeometry(): THREE.BufferGeometry {
-  // Base cylinder + battlements + cone roof
   const group = new THREE.Group();
 
   const baseGeo = new THREE.CylinderGeometry(15, 17, 30, 16);
@@ -96,7 +113,6 @@ function createCastleGeometry(): THREE.BufferGeometry {
   roofMesh.position.y = 48;
   group.add(roofMesh);
 
-  // Convert merged group to buffer geometry
   const geometries: THREE.BufferGeometry[] = [];
   group.traverse((child) => {
     if (child instanceof THREE.Mesh) {
@@ -106,7 +122,6 @@ function createCastleGeometry(): THREE.BufferGeometry {
     }
   });
 
-  // Combine geometries
   const merged = mergeBufferGeometries(geometries);
   merged.center();
   return merged;
